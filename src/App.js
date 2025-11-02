@@ -14,6 +14,7 @@ const App = () => {
   const [forecastData, setForecastData] = useState(null);
   // ensure that loading is finished before rendering
   const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   // Function to handle search submission
   const handleSubmit = (e, toggleSearchBarVisibility) => {
@@ -101,11 +102,7 @@ const App = () => {
       const { lat, lon } = weatherData.data.coord; // get longitude and latitude for air pollution data (doesn't take city as a parameter, as far as I know)
       // fetch air pollution data for the same location
       const airPollutionData = await axios.get(
-        `http://api.openweathermap.org/data/2.5/air_pollution?lat=${lat}&lon=${lon}&appid=a484704a1f7fd5d6f7fa69419cdbf252`
-      );
-      // fetch UV index data for the same location
-      const UVIndexData = await axios.get(
-        `http://api.openweathermap.org/data/2.5/uvi?lat=${lat}&lon=${lon}&appid=a484704a1f7fd5d6f7fa69419cdbf252`
+        `https://api.openweathermap.org/data/2.5/air_pollution?lat=${lat}&lon=${lon}&appid=a484704a1f7fd5d6f7fa69419cdbf252`
       );
       setLat(lat);
       setLon(lon);
@@ -120,12 +117,14 @@ const App = () => {
         icon: weatherData.data.weather[0].icon,
         humidity: weatherData.data.main.humidity,
         aqi: airPollutionData.data.list[0].main.aqi,
-        uvIndex: UVIndexData.data.value,
+        uvIndex: 0,
         time: hour,
       };
       setCurrentWeatherData(weatherDataObject);
     } catch (error) {
-      console.error(error);
+      console.error("Error fetching current data:", error);
+      setError(`Failed to fetch current weather: ${error.message}`);
+      setIsLoading(false);
     }
   };
 
@@ -134,32 +133,34 @@ const App = () => {
     try {
       // 7 day weather forecast (hourly temperature and precipitation probability) and current is_day
       const weatherData = await axios.get(
-        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=is_day&hourly=temperature_2m,precipitation_probability,weather_code&&daily=temperature_2m_max,temperature_2m_min,weather_code,uv_index_max&timezone=Europe/London`
+        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=is_day&hourly=temperature_2m,precipitation_probability,weather_code&daily=temperature_2m_max,temperature_2m_min,weather_code,uv_index_max,relative_humidity_2m_mean&timezone=Europe/London`
       );
       // 4 day weather forecast for aqi (hourly for next four days)
       const weatherAQI = await axios.get(
         `https://api.openweathermap.org/data/2.5/air_pollution/forecast?lat=${lat}&lon=${lon}&appid=a484704a1f7fd5d6f7fa69419cdbf252`
       );
-      // 5 day pollen forecast - note: we are using TREE POLLEN
-      const weatherPollen = await axios.get(
-        `https://pollen.googleapis.com/v1/forecast:lookup?key=AIzaSyAzyS76Iqms2XUebSlIrSBgH1NjRLAsTQw&location.longitude=${lon}&location.latitude=${lat}&days=5`
-      );
-      // add the pollen index
-      let pollenData = weatherPollen.data.dailyInfo.map(
-        (day) => day.pollenTypeInfo[1].indexInfo.value
-      );
-      // make it so the pollen data holds three arrays, one for the pollen index, one for the category, and one for date
-      const pollenCategory = weatherPollen.data.dailyInfo.map(
-        (day) => day.pollenTypeInfo[1].indexInfo.category
-      );
-      const pollenDate = weatherPollen.data.dailyInfo.map((day) => day.date);
-      pollenData = [pollenData, pollenCategory, pollenDate];
-      // 5 day weather forecast for humidity from open weather map
-      const weatherHumidity = await axios.get(
-        `https://api.openweathermap.org/data/2.5/forecast/daily?lat=${lat}&lon=${lon}&cnt=5&appid=a484704a1f7fd5d6f7fa69419cdbf252`
-      );
-      // create a list of 5 humidity values for each day
-      const humidityList = weatherHumidity.data.list.map((day) => day.humidity);
+      // Get humidity data from Open-Meteo
+      const humidityList =
+        weatherData.data.daily.relative_humidity_2m_mean || [];
+
+      // 5 day pollen forecast
+      let pollenData = [[], [], []];
+      try {
+        const weatherPollen = await axios.get(
+          `https://pollen.googleapis.com/v1/forecast:lookup?key=AIzaSyAzyS76Iqms2XUebSlIrSBgH1NjRLAsTQw&location.longitude=${lon}&location.latitude=${lat}&days=5`
+        );
+        // add the pollen index
+        const pollenValues = weatherPollen.data.dailyInfo.map(
+          (day) => day.pollenTypeInfo[1].indexInfo.value
+        );
+        const pollenCategory = weatherPollen.data.dailyInfo.map(
+          (day) => day.pollenTypeInfo[1].indexInfo.category
+        );
+        const pollenDate = weatherPollen.data.dailyInfo.map((day) => day.date);
+        pollenData = [pollenValues, pollenCategory, pollenDate];
+      } catch (pollenError) {
+        console.warn("Pollen data unavailable:", pollenError.message);
+      }
       console.log(
         "weather data weather code",
         weatherData.data.daily.weather_code
@@ -193,24 +194,37 @@ const App = () => {
         },
       };
       setForecastData(forecastDataObject);
-      // add is_day to the current weather data object
+      // add is_day and UV index to the current weather data object
       if (currentWeatherData === null) {
         console.log("current weather data is null");
       }
       const currentWeatherDataObject = {
         ...currentWeatherData,
         isDay: weatherData.data.current.is_day,
+        uvIndex: weatherData.data.daily.uv_index_max[0] || 0,
       };
       console.log("current weather data object", currentWeatherDataObject);
       setCurrentWeatherData(currentWeatherDataObject);
     } catch (error) {
-      console.error(error);
+      console.error("Error fetching forecast data:", error);
+      setError(`Failed to fetch forecast: ${error.message}`);
+      setIsLoading(false);
     }
   };
 
   return (
     <div>
-      {!isLoading && (
+      {error ? (
+        <div style={{ padding: "20px", color: "red", fontSize: "16px" }}>
+          <h2>Error</h2>
+          <p>{error}</p>
+          <p>Check the browser console for more details.</p>
+        </div>
+      ) : isLoading ? (
+        <div style={{ padding: "20px", textAlign: "center", fontSize: "18px" }}>
+          Loading weather data for {city}...
+        </div>
+      ) : (
         <MobileWeather
           forecastData={forecastData}
           currentWeatherData={currentWeatherData}
